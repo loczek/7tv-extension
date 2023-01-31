@@ -4,15 +4,17 @@
 			<div class="values"></div>
 			{{ setting }}
 			{{ node.options?.unit }}
-			<input
-				:id="node.key"
-				v-model="setting"
-				type="range"
-				:min="node.options?.min"
-				:max="node.options?.max"
-				:step="node.options?.step"
-				class="slider"
-			/>
+			<div class="slider-container">
+				<input
+					:id="node.key"
+					v-model="setting"
+					type="range"
+					:min="node.options?.min"
+					:max="node.options?.max"
+					:step="node.options?.step"
+					class="slider"
+				/>
+			</div>
 		</div>
 		<span v-if="thresoldName" class="thresold-name"> ({{ thresoldName }}) </span>
 	</div>
@@ -57,5 +59,37 @@ const thresoldName = computed(() => {
 	display: flex;
 	align-items: center;
 	float: right;
+}
+
+.slider-container {
+	height: 0.5rem;
+	background: var(--seventv-input-background);
+	outline: 1px solid var(--seventv-input-border);
+	width: fit-content;
+	align-items: center;
+	border-radius: 10rem;
+	display: inline-flex;
+}
+
+.slider {
+	-webkit-appearance: none;
+	appearance: none;
+	background: transparent;
+}
+
+.slider::-webkit-slider-thumb {
+	-webkit-appearance: none;
+	appearance: none;
+	background-color: var(--seventv-input-border);
+	border-radius: 1rem;
+	height: 1.5rem;
+	width: 1.5rem;
+	z-index: 100;
+}
+
+.slider::-webkit-slider-runnable-track {
+	-webkit-appearance: none;
+	appearance: none;
+	cursor: pointer;
 }
 </style>
