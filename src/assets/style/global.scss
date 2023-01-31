@@ -5,6 +5,8 @@
 .tw-root--theme-dark {
 	--seventv-text-color-normal: #f0f0f0;
 	--seventv-text-color-secondary: #f0f0f078;
+	--seventv-input-background: #202020;
+	--seventv-input-border: #3b3b3b;
 	--seventv-highlight-neutral-1: #8080803b;
 	--seventv-background-transparent-1: #161616;
 	--seventv-background-lesser-transparent-1: #161616;
@@ -25,6 +27,8 @@
 .tw-root--theme-light {
 	--seventv-text-color-normal: #161616;
 	--seventv-text-color-secondary: #161616b3;
+	--seventv-input-background: #fff;
+	--seventv-input-border: #ccc;
 	--seventv-highlight-neutral-1: #cfcfcf9e;
 	--seventv-background-transparent-1: #f7f7f7;
 	--seventv-background-lesser-transparent-1: #f7f7f7;
