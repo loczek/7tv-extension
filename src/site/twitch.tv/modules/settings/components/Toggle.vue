@@ -32,11 +32,13 @@ const setting = useConfig<boolean>(props.node.key);
 	align-items: center;
 	gap: 1rem;
 }
+
 .slider-option {
 	font-size: 1.4rem;
 	font-weight: 600;
 	vertical-align: center;
 }
+
 .switch {
 	display: inline-block;
 	height: 2rem;
@@ -49,7 +51,7 @@ const setting = useConfig<boolean>(props.node.key);
 }
 
 .slider {
-	background-color: #ccc;
+	background-color: var(--seventv-input-background);
 	bottom: 0;
 	cursor: pointer;
 	left: 0;
@@ -57,10 +59,11 @@ const setting = useConfig<boolean>(props.node.key);
 	right: 0;
 	top: 0;
 	transition: 0.25s;
+	outline: 1px solid var(--seventv-input-border);
 }
 
 .slider:before {
-	background-color: #fff;
+	background-color: var(--seventv-input-border);
 	bottom: 0.3rem;
 	content: "";
 	height: 1.4rem;
@@ -68,22 +71,18 @@ const setting = useConfig<boolean>(props.node.key);
 	position: absolute;
 	transition: 0.25s;
 	width: 1.4rem;
-	transform: rotate(-45deg);
-}
-
-input:checked + .slider {
-	background-color: #66bb6a;
 }
 
 input:checked + .slider:before {
-	transform: translateX(2rem) rotate(45deg);
+	background-color: #66bb6a;
+	transform: translateX(2rem);
 }
 
 .slider.round {
-	clip-path: create-bevel(0.33rem);
+	border-radius: 10rem;
 }
 
 .slider.round:before {
-	clip-path: create-bevel(0.5rem);
+	border-radius: 10rem;
 }
 </style>
