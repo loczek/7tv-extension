@@ -79,10 +79,10 @@ input:checked + .slider:before {
 }
 
 .slider.round {
-	border-radius: 10rem;
+	border-radius: 9999px;
 }
 
 .slider.round:before {
-	border-radius: 10rem;
+	border-radius: 9999px;
 }
 </style>
