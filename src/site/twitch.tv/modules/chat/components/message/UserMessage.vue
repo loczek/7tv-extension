@@ -1,9 +1,10 @@
 <template>
 	<span
+		ref="msgEl"
 		class="seventv-user-message"
 		:msg-id="msg.id"
 		:class="{
-			deleted: msg.banned || msg.deleted,
+			deleted: !hideDeletionState && (msg.moderation.banned || msg.moderation.deleted),
 			'has-mention': as == 'Chat' && msg.mentions.has('#actor'),
 			'has-highlight': as == 'Chat' && msg.highlight,
 		}"
@@ -21,8 +22,8 @@
 		/>
 
 		<!-- Timestamp -->
-		<template v-if="properties.showTimestamps || msg.historical">
-			<span class="chat-line__timestamp">
+		<template v-if="properties.showTimestamps || msg.historical || forceTimestamp">
+			<span class="seventv-chat-message-timestamp">
 				{{
 					new Date(props.msg.timestamp).toLocaleTimeString(locale, {
 						hour: "numeric",
@@ -35,25 +36,21 @@
 
 		<!-- Mod Icons -->
 		<template v-if="properties.isModerator && properties.showModerationIcons">
-			<ModIcons
-				:msg="msg"
-				@ban="banUserFromChat(null)"
-				@timeout="banUserFromChat('10m')"
-				@delete="deleteChatMessage(msg.id)"
-			/>
+			<ModIcons :msg="msg" />
 		</template>
 
 		<!-- Chat Author -->
 		<UserTag
-			v-if="msg.author"
+			v-if="msg.author && !hideAuthor"
 			:user="msg.author"
 			:color="color"
 			:badges="msg.badges"
-			@name-click="nameClick"
-			@badge-click="badgeClick"
+			:msg-id="msg.sym"
+			@name-click="(ev) => openViewerCard(ev, msg)"
+			@badge-click="(ev, badge) => openViewerCard(ev, msg)"
 		/>
 
-		<span>
+		<span v-if="!hideAuthor">
 			{{ !msg.slashMe ? ": " : " " }}
 		</span>
 
@@ -65,8 +62,9 @@
 					<Emote
 						class="emote-token"
 						:emote="token.content.emote"
+						:format="properties.imageFormat"
 						:overlaid="token.content.overlaid"
-						@emote-click="emoteClick"
+						:clickable="true"
 					/>
 					<span v-if="token.content" :style="{ color: token.content.cheerColor }">
 						{{ token.content.cheerAmount }}
@@ -77,18 +75,25 @@
 				</template>
 			</template>
 		</span>
+
+		<!-- Ban State -->
+		<template v-if="!hideModeration && msg.moderation.banned">
+			<span class="seventv-chat-message-moderated seventv-chat-message-banned">
+				{{ msg.moderation.banDuration ? `Timed out (${msg.moderation.banDuration}s)` : "Permanently Banned" }}
+			</span>
+		</template>
 	</span>
 </template>
 
 <script setup lang="ts">
-import { computed, toRef } from "vue";
+import { onMounted, ref, toRef, watch, watchEffect } from "vue";
+import { useTimeoutFn } from "@vueuse/shared";
 import { normalizeUsername } from "@/common/Color";
-import { AnyToken, ChatMessage } from "@/common/chat/ChatMessage";
+import type { AnyToken, ChatMessage } from "@/common/chat/ChatMessage";
 import { IsEmotePart, IsLinkPart, IsMentionPart } from "@/common/type-predicates/MessageParts";
-import { useChatEmotes } from "@/composable/chat/useChatEmotes";
-import { useChatModeration } from "@/composable/chat/useChatModeration";
+import { useChannelContext } from "@/composable/channel/useChannelContext";
 import { useChatProperties } from "@/composable/chat/useChatProperties";
-import { useCardOpeners } from "@/composable/useCardOpeners";
+import { useChatTools } from "@/composable/chat/useChatTools";
 import { useCosmetics } from "@/composable/useCosmetics";
 import { useConfig } from "@/composable/useSettings";
 import Emote from "@/site/twitch.tv/modules/chat/components/message/Emote.vue";
@@ -105,28 +110,35 @@ const props = withDefaults(
 			label: string;
 			color: string;
 		};
+		emotes?: Record<string, SevenTV.ActiveEmote>;
+		isModerator?: boolean;
+		hideAuthor?: boolean;
+		hideModeration?: boolean;
+		hideDeletionState?: boolean;
+		forceTimestamp?: boolean;
 	}>(),
 	{ as: "Chat" },
 );
 
 const msg = toRef(props, "msg");
+const msgEl = ref<HTMLSpanElement | null>();
 
-const emotes = useChatEmotes();
-const properties = useChatProperties();
-const { nameClick, emoteClick, badgeClick } = useCardOpeners(props.msg);
+const ctx = useChannelContext();
+const properties = useChatProperties(ctx);
+const { openViewerCard } = useChatTools(ctx);
 
-const emoteMargin = useConfig<number>("chat.emote_margin");
-const emoteMarginValue = computed(() => `${emoteMargin.value}rem`);
+// TODO: css variables
 const meStyle = useConfig<number>("chat.slash_me_style");
 
 // Get the locale to format the timestamp
 const locale = navigator.languages && navigator.languages.length ? navigator.languages[0] : navigator.language ?? "en";
 
-const color = props.msg.author
-	? properties.useHighContrastColors
-		? normalizeUsername(props.msg.author.color, properties.isDarkTheme as 0 | 1)
-		: props.msg.author.color
-	: "inherit";
+const color =
+	props.msg.author && props.msg.author.color
+		? properties.useHighContrastColors
+			? normalizeUsername(props.msg.author.color, properties.isDarkTheme as 0 | 1)
+			: props.msg.author.color
+		: "inherit";
 
 // Personal Emotes
 const cosmetics = props.msg.author ? useCosmetics(props.msg.author.id) : { emotes: {} };
@@ -134,11 +146,13 @@ const cosmetics = props.msg.author ? useCosmetics(props.msg.author.id) : { emote
 // Tokenize the message
 type MessageTokenOrText = AnyToken | string;
 const tokenizer = props.msg.getTokenizer();
-const tokens = computed<MessageTokenOrText[]>(() => {
-	if (!tokenizer) return [];
+const tokens = ref([] as MessageTokenOrText[]);
+
+function doTokenize() {
+	if (!tokenizer) return;
 
 	const newTokens = tokenizer.tokenize({
-		emoteMap: emotes.active,
+		emoteMap: props.emotes ?? {},
 		localEmoteMap: { ...cosmetics.emotes, ...props.msg.nativeEmotes },
 	});
 
@@ -165,8 +179,25 @@ const tokens = computed<MessageTokenOrText[]>(() => {
 		result.push(after);
 	}
 
-	return result;
-});
+	tokens.value = result;
+}
+
+watch(
+	() => [cosmetics.emotes, props.msg.nativeEmotes],
+	() => doTokenize(),
+	{ immediate: true },
+);
+
+// For historical messages
+// Re-render emotes once they load in
+if (props.msg.historical) {
+	useTimeoutFn(
+		watchEffect(() => {
+			doTokenize();
+		}),
+		1e4,
+	);
+}
 
 function getPart(part: AnyToken) {
 	if (IsEmotePart(part)) {
@@ -178,11 +209,14 @@ function getPart(part: AnyToken) {
 	}
 }
 
-// Moderation
-const { banUserFromChat, deleteChatMessage } =
-	props.msg.channelID && props.msg.author
-		? useChatModeration(props.msg.channelID!, props.msg.author?.username)
-		: { banUserFromChat: () => void 0, deleteChatMessage: () => void 0 };
+onMounted(() => {
+	if (!msg.value || !msgEl.value) return;
+
+	if (msg.value.highlight) {
+		msgEl.value.style.setProperty("--seventv-highlight-color", msg.value.highlight.color);
+		msgEl.value.style.setProperty("--seventv-highlight-dim-color", msg.value.highlight.dimColor);
+	}
+});
 </script>
 
 <style scoped lang="scss">
@@ -191,10 +225,10 @@ const { banUserFromChat, deleteChatMessage } =
 
 	&.has-highlight {
 		border: 0.25em solid;
-		border-color: v-bind("msg.highlight?.color");
 		border-top: none;
 		border-bottom: none;
-		background-color: v-bind("msg.highlight?.dimColor");
+		border-color: var(--seventv-highlight-color);
+		background-color: var(--seventv-highlight-dim-color);
 		padding: 1rem 0.25rem;
 		margin: 0 -0.5em;
 
@@ -205,7 +239,7 @@ const { banUserFromChat, deleteChatMessage } =
 				display: grid;
 				width: 100%;
 				justify-content: end;
-				color: v-bind("msg.highlight?.color");
+				color: var(--seventv-highlight-color);
 				transform: translateY(-1.5em);
 
 				font-weight: 600;
@@ -215,19 +249,10 @@ const { banUserFromChat, deleteChatMessage } =
 		}
 	}
 
-	&[state="IN_FLIGHT"] {
-		opacity: 0.5;
-	}
-
-	&[state="FAILED"] {
-		opacity: 0.5;
-		color: var(--seventv-warning);
-	}
-
 	.emote-token {
 		display: inline-grid;
 		vertical-align: middle;
-		margin: v-bind("emoteMarginValue");
+		margin: var(--seventv-emote-margin);
 		margin-left: 0 !important;
 		margin-right: 0 !important;
 	}
@@ -237,8 +262,24 @@ const { banUserFromChat, deleteChatMessage } =
 		font-weight: bold;
 	}
 }
-.deleted:not(:hover) {
+.deleted:not(:hover) > .seventv-chat-message-body {
 	opacity: 0.5;
 	text-decoration: line-through;
+}
+
+.seventv-chat-message-moderated {
+	&::before {
+		content: "—";
+	}
+
+	display: inline-block;
+	font-style: italic;
+	vertical-align: center;
+	color: var(--seventv-muted);
+}
+
+.seventv-chat-message-timestamp {
+	margin-right: 0.5rem;
+	color: var(--seventv-muted);
 }
 </style>

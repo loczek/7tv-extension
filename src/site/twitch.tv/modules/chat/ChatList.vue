@@ -1,15 +1,15 @@
 <template>
 	<main ref="chatListEl" class="seventv-chat-list" :alternating-background="isAlternatingBackground">
-		<div v-for="msg of messages.displayed" :key="msg.id" v-memo="[msg]" :msg-id="msg.id" class="seventv-message">
+		<div v-for="msg of displayedMessages" :key="msg.sym" v-memo="[msg]" :msg-id="msg.id" class="seventv-message">
 			<template v-if="msg.instance">
 				<ModSlider v-if="isModSliderEnabled && properties.isModerator && msg.author" :msg="msg">
 					<component :is="msg.instance" v-bind="msg.componentProps" :msg="msg">
-						<UserMessage :msg="msg" />
+						<UserMessage :msg="msg" :emotes="emotes.active" />
 					</component>
 				</ModSlider>
 
 				<component :is="msg.instance" v-else v-bind="msg.componentProps" :msg="msg">
-					<UserMessage :msg="msg" />
+					<UserMessage :msg="msg" :emotes="emotes.active" />
 				</component>
 			</template>
 			<template v-else>
@@ -20,15 +20,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, toRef, watch } from "vue";
-import { until, useDocumentVisibility, useTimeoutFn } from "@vueuse/core";
+import { nextTick, reactive, ref, toRef, watch } from "vue";
+import { until, useDocumentVisibility, useMagicKeys, useTimeoutFn, watchDebounced } from "@vueuse/core";
+import { storeToRefs } from "pinia";
 import { useStore } from "@/store/main";
-import { getRandomInt } from "@/common/Rand";
+import { log } from "@/common/Logger";
 import { HookedInstance } from "@/common/ReactHooks";
 import { defineFunctionHook, unsetPropertyHook } from "@/common/Reflection";
 import { convertCheerEmote, convertTwitchEmote } from "@/common/Transform";
-import { ChatMessage } from "@/common/chat/ChatMessage";
+import { ChatMessage, ChatMessageModeration, ChatUser } from "@/common/chat/ChatMessage";
 import { IsChatMessage, IsDisplayableMessage, IsModerationMessage } from "@/common/type-predicates/Messages";
+import { useChannelContext } from "@/composable/channel/useChannelContext";
+import { useChatEmotes } from "@/composable/chat/useChatEmotes";
 import { useChatMessages } from "@/composable/chat/useChatMessages";
 import { useChatProperties } from "@/composable/chat/useChatProperties";
 import { useChatScroller } from "@/composable/chat/useChatScroller";
@@ -43,56 +46,32 @@ const props = defineProps<{
 	messageHandler: Twitch.MessageHandlerAPI | null;
 }>();
 
-const store = useStore();
-const messages = useChatMessages();
-const scroller = useChatScroller();
-const properties = useChatProperties();
+const ctx = useChannelContext();
+const { identity } = storeToRefs(useStore());
+const emotes = useChatEmotes(ctx);
+const messages = useChatMessages(ctx);
+const displayedMessages = toRef(messages, "displayed");
+const scroller = useChatScroller(ctx);
+const properties = useChatProperties(ctx);
 const pageVisibility = useDocumentVisibility();
+const isHovering = toRef(properties, "hovering");
 
-const actorRegexp = computed(() => (store.identity ? new RegExp(`\\b${store.identity?.username}\\b`) : null));
+const actorRegexp = ref<RegExp | null>();
+watch(identity, (identity) => (actorRegexp.value = identity ? new RegExp(`\\b${identity.username}\\b`) : null), {
+	immediate: true,
+});
 
 const isModSliderEnabled = useConfig<boolean>("chat.mod_slider");
 const isAlternatingBackground = useConfig<boolean>("chat.alternating_background");
 
-// Keep track of props
-
-// The message handler is hooked to render messages and prevent
-// the native twitch renderer from rendering them
 const messageHandler = toRef(props, "messageHandler");
-
-watch(
-	messageHandler,
-	(handler, old) => {
-		if (handler !== old && old) {
-			unsetPropertyHook(old, "handleMessage");
-		} else if (handler) {
-			defineFunctionHook(handler, "handleMessage", function (old, msg: Twitch.AnyMessage) {
-				const t = Date.now() + getRandomInt(0, 1000);
-				const msgData = Object.create({ seventv: true, t });
-				for (const k of Object.keys(msg)) {
-					msgData[k] = msg[k as keyof Twitch.AnyMessage];
-				}
-
-				const ok = onMessage(msgData);
-				if (ok) return ""; // message was rendered by the extension
-
-				// message was not rendered by the extension
-				return old?.call(this, msg);
-			});
-		}
-	},
-	{ immediate: true },
-);
+const list = toRef(props, "list");
 
 // Determine if the message should perform some action or be sent to the chatAPI for rendering
 const onMessage = (msgData: Twitch.AnyMessage): boolean => {
 	const msg = new ChatMessage(msgData.id);
-	const c = getMessageComponent(msgData.type);
-	if (c) {
-		msg.setComponent(c, { msgData: msgData });
-	}
 
-	msg.channelID = store.channel?.id ?? "";
+	msg.channelID = ctx.id;
 
 	switch (msgData.type) {
 		case MessageType.MESSAGE:
@@ -125,6 +104,11 @@ const onMessage = (msgData: Twitch.AnyMessage): boolean => {
 };
 
 function onChatMessage(msg: ChatMessage, msgData: Twitch.AnyMessage, shouldRender = true) {
+	const c = getMessageComponent(msgData.type);
+	if (c) {
+		msg.setComponent(c, { msgData: msgData });
+	}
+
 	if (!msg.instance) {
 		msg.setComponent(typeMap[0], { msgData: msgData });
 	}
@@ -147,19 +131,26 @@ function onChatMessage(msg: ChatMessage, msgData: Twitch.AnyMessage, shouldRende
 
 		// assign parent message data
 		if (msgData.reply) {
+			const parentMsgAuthor =
+				msgData.reply.parentUserLogin && msgData.reply.parentDisplayName
+					? {
+							username: msgData.reply.parentUserLogin,
+							displayName: msgData.reply.parentDisplayName,
+					  }
+					: null;
+
 			msg.parent = {
 				id: msgData.reply.parentMsgId,
 				uid: msgData.reply.parentUid,
 				deleted: msgData.reply.parentDeleted,
 				body: msgData.reply.parentMessageBody,
-				author:
-					msgData.reply.parentUserLogin && msgData.reply.parentDisplayName
-						? {
-								username: msgData.reply.parentUserLogin,
-								displayName: msgData.reply.parentDisplayName,
-						  }
-						: null,
+				author: parentMsgAuthor,
 			};
+
+			// Highlight as a reply to the actor
+			if (parentMsgAuthor && actorRegexp.value && actorRegexp.value.test(parentMsgAuthor.username)) {
+				msg.setHighlight("#e13232", "Replying to You");
+			}
 		}
 
 		// message is /me
@@ -167,8 +158,8 @@ function onChatMessage(msg: ChatMessage, msgData: Twitch.AnyMessage, shouldRende
 			msg.slashMe = true;
 		}
 
-		// message mentions the actor
-		if (actorRegexp.value && actorRegexp.value.test(msg.body)) {
+		// highlight when message mentions the actor
+		if (actorRegexp.value && actorRegexp.value.test(msg.body.toLowerCase())) {
 			msg.setHighlight("#e13232", "Mentions You");
 		}
 
@@ -218,18 +209,37 @@ function onChatMessage(msg: ChatMessage, msgData: Twitch.AnyMessage, shouldRende
 	// define message author
 	const authorData = msgData.user ?? msgData.message?.user ?? null;
 	if (authorData) {
-		msg.setAuthor({
-			id: authorData.userID,
-			username: authorData.userLogin,
-			displayName: authorData.userDisplayName ?? authorData.displayName ?? authorData.userLogin,
-			color: authorData.color,
-		});
+		const knownChatter = messages.chatters[authorData.userID];
+		if (knownChatter) {
+			knownChatter.username = authorData.userLogin;
+			knownChatter.displayName = authorData.userDisplayName ?? authorData.displayName ?? authorData.userLogin;
+			knownChatter.color = authorData.color;
+			knownChatter.intl = authorData.isIntl;
+		}
+
+		msg.setAuthor(
+			knownChatter ?? {
+				id: authorData.userID,
+				username: authorData.userLogin,
+				displayName: authorData.userDisplayName ?? authorData.displayName ?? authorData.userLogin,
+				color: authorData.color,
+			},
+		);
+		// check blocked state and ignore if blocked
+		if (msg.author && properties.blockedUsers.has(msg.author.id)) {
+			if (!properties.isModerator) {
+				log.debug("Ignored message from blocked user", msg.author.id);
+				return;
+			}
+
+			msg.setHighlight("#9488855A", "You Blocked This User");
+		}
+
+		if (identity.value && msg.author && msg.author.id === identity.value.id) {
+			msg.author.isActor = true;
+		}
 
 		msg.badges = msgData.badges ?? msgData.message?.badges ?? {};
-
-		if (!properties.isModerator && msg.author && properties.blockedUsers.has(msg.author.id)) {
-			msg.setHighlight("#ff0000", "Blocked User");
-		}
 	}
 
 	// message is sent by the current user
@@ -239,13 +249,13 @@ function onChatMessage(msg: ChatMessage, msgData: Twitch.AnyMessage, shouldRende
 		// Set a timeout, beyond which we'll consider the message failed to send
 		const { stop } = useTimeoutFn(() => {
 			msg.setDeliveryState("BOUNCED");
-		}, 10e3);
+		}, 1e4);
 
 		until(ref(msg.deliveryState)).toBe("SENT").then(stop);
 	}
 
 	if (IsChatMessage(msgData)) msg.setTimestamp(msgData.timestamp);
-	else msg.setTimestamp(msgData.message?.timestamp ?? 0);
+	else if (msgData.message) msg.setTimestamp(msgData.message.timestamp ?? 0);
 
 	// Add message to store
 	// it will be rendered on the next tick
@@ -256,12 +266,58 @@ function onModerationMessage(msgData: Twitch.ModerationMessage) {
 	if (msgData.moderationType === ModerationType.DELETE) {
 		const found = messages.find((m) => m.id == msgData.targetMessageID);
 		if (found) {
-			found.deleted = true;
+			found.moderation.deleted = true;
 		}
 	} else {
+		const prev = messages.moderated[0];
+		if (
+			prev &&
+			prev.victim &&
+			prev.victim.username === msgData.userLogin &&
+			prev.mod.banDuration === msgData.duration
+		) {
+			// skip duplicate moderation messages
+			return;
+		}
+
 		const msgList = messages.messagesByUser(msgData.userLogin);
+
+		const action = {
+			actionType: msgData.duration > 0 ? "TIMEOUT" : "BAN",
+			banDuration: msgData.duration,
+			banReason: msgData.reason,
+			actor: null,
+			banned: true,
+			deleted: false,
+			timestamp: Date.now(),
+		} as ChatMessageModeration;
+
+		let victim: null | ChatUser = null;
 		for (const m of msgList) {
-			m.banned = true;
+			m.moderation = action;
+
+			if (!victim) {
+				victim = m.author as ChatUser;
+			}
+		}
+
+		// add to moderation log
+		messages.moderated.unshift({
+			messages: msgList.reverse().slice(0, 10), // last 10 messages
+			mod: action,
+			victim: victim || {
+				id: msgData.userLogin,
+				username: msgData.userLogin,
+				displayName: msgData.userLogin,
+				color: "",
+			},
+		});
+
+		// cleanup old logs
+		if (messages.moderated.length > 125) {
+			nextTick(() => {
+				while (messages.moderated.length > 100) messages.moderated.pop();
+			});
 		}
 	}
 }
@@ -274,10 +330,83 @@ function onMessageIdUpdate(msg: Twitch.IDUpdateMessage) {
 	}
 }
 
+// Keep track of props
+
+// The message handler is hooked to render messages and prevent
+// the native twitch renderer from rendering them
+watch(
+	messageHandler,
+	(handler, old) => {
+		if (handler !== old && old) {
+			unsetPropertyHook(old, "handleMessage");
+		} else if (handler) {
+			defineFunctionHook(handler, "handleMessage", function (old, msg: Twitch.AnyMessage) {
+				const ok = onMessage(msg);
+				if (ok) return ""; // message was rendered by the extension
+
+				// message was not rendered by the extension
+				unhandled.set(msg.id, msg);
+				return old?.call(this, msg);
+			});
+		}
+	},
+	{ immediate: true },
+);
+
+// Keep track of unhandled nodes
+const unhandled = reactive<Map<string, Twitch.AnyMessage>>(new Map());
+const unhandledNodeMap = new Map<string, Element>();
+
+watchDebounced(
+	list.value.domNodes,
+	(nodes) => {
+		const missingIds = new Set<string>(unhandledNodeMap.keys()); // ids of messages that are no longer rendered
+
+		for (const [nodeId, node] of Object.entries(nodes)) {
+			if (nodeId === "root") continue;
+			missingIds.delete(nodeId);
+			if (unhandledNodeMap.has(nodeId) || !unhandled.has(nodeId)) continue;
+
+			const m = new ChatMessage(nodeId + "-unhandled");
+			m.wrappedNode = node;
+			messages.add(m);
+
+			unhandledNodeMap.set(nodeId, node);
+		}
+
+		for (const nodeId of missingIds) {
+			unhandledNodeMap.delete(nodeId);
+		}
+	},
+	{ debounce: 100, immediate: true },
+);
+
+// Scroll Pausing on hotkey / hover
+const { alt } = useMagicKeys();
+
+let pausedByHotkey = false;
+watch(
+	() => [alt, isHovering],
+	([isAlt, isHover]) => {
+		if (!scroller.paused) {
+			if (isHover && properties.pauseReason.has("MOUSEOVER")) {
+				scroller.pause();
+				pausedByHotkey = true;
+			} else if (isHover && isAlt && properties.pauseReason.has("ALTKEY")) {
+				scroller.pause();
+				pausedByHotkey = true;
+			}
+		} else if (pausedByHotkey) {
+			scroller.unpause();
+			pausedByHotkey = false;
+		}
+	},
+);
+
 // Pause scrolling when page is not visible
 const pausedByVisibility = ref(false);
 watch(pageVisibility, (state) => {
-	if (state === "hidden") {
+	if (state === "hidden" && !scroller.paused) {
 		scroller.pause();
 		pausedByVisibility.value = true;
 	} else if (pausedByVisibility.value) {

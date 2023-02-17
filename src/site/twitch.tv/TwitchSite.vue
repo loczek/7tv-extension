@@ -1,25 +1,43 @@
 <template>
 	<template v-for="[key, mod] of Object.entries(modules)" :key="key">
-		<component :is="mod" ref="renderedModules" />
+		<ModuleWrapper :mod="mod" @mounted="onModuleUpdate(key as unknown as ModuleID, $event)" />
 	</template>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
+import { onMounted, provide, ref, watch } from "vue";
 import { useStore } from "@/store/main";
+import { SITE_NAV_PATHNAME } from "@/common/Constant";
 import { useComponentHook } from "@/common/ReactHooks";
-import { useChatProperties } from "@/composable/chat/useChatProperties";
+import { useFrankerFaceZ } from "@/composable/useFrankerFaceZ";
 import { getModule } from "@/composable/useModule";
 import { synchronizeFrankerFaceZ, useConfig } from "@/composable/useSettings";
+import { useUserAgent } from "@/composable/useUserAgent";
+import ModuleWrapper from "./ModuleWrapper.vue";
 import type { ModuleID } from "@/types/module";
 
 const store = useStore();
-const chatProperties = useChatProperties();
+const ua = useUserAgent();
+const ffz = useFrankerFaceZ();
+ffz.disableChatProcessing();
 
 const useTransparency = useConfig("ui.transparent_backgrounds");
-chatProperties.imageFormat = store.avifSupported ? "AVIF" : "WEBP";
-store.setPreferredImageFormat(chatProperties.imageFormat);
+ua.preferredFormat = store.avifSupported ? "AVIF" : "WEBP";
+store.setPreferredImageFormat(ua.preferredFormat);
 store.setPlatform("TWITCH");
+
+const currentPath = ref("");
+provide(SITE_NAV_PATHNAME, currentPath);
+
+// Import modules
+const modules = import.meta.glob("./modules/**/*Module.vue", { eager: true, import: "default" });
+for (const key in modules) {
+	const modPath = key.split("/");
+	const modKey = modPath.splice(modPath.length - 2, 1).pop();
+
+	modules[modKey!] = modules[key];
+	delete modules[key];
+}
 
 // Session User
 useComponentHook<Twitch.SessionUserComponent>(
@@ -43,23 +61,24 @@ useComponentHook<Twitch.SessionUserComponent>(
 	},
 );
 
-const disabled = [] as ModuleID[];
+// Router updates
+useComponentHook<Twitch.RouterComponent>(
+	{
+		predicate: (n) => n.props && n.props.match && n.props.history,
+	},
+	{
+		hooks: {
+			update(v) {
+				if (!v.component || !v.component.props || !v.component.props.location) return;
 
-// Import modules
-const modules = import.meta.glob("./modules/**/*Module.vue", { eager: true, import: "default" });
-for (const key in modules) {
-	const modPath = key.split("/");
-	const modKey = modPath.splice(modPath.length - 2, 1).pop();
+				currentPath.value = v.component.props.location.pathname;
+			},
+		},
+	},
+);
 
-	if (disabled.includes(modKey as ModuleID)) {
-		delete modules[key];
-		continue;
-	}
-
-	modules[modKey!] = modules[key];
-	delete modules[key];
-}
 const rootClasses = document.documentElement.classList;
+
 watch(
 	useTransparency,
 	() => {
@@ -68,24 +87,14 @@ watch(
 	{ immediate: true },
 );
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const renderedModules = ref<Record<string, InstanceType<any>>>();
+function onModuleUpdate(mod: ModuleID, inst: InstanceType<ComponentFactory>) {
+	const modInst = getModule(mod);
+	if (!modInst) return;
+
+	modInst.instance = inst;
+}
 
 onMounted(() => {
-	if (!renderedModules.value) return;
-	for (let i = 0; i < renderedModules.value.length; i++) {
-		const rmod = renderedModules.value[i];
-		if (!rmod) continue;
-
-		const modID = Object.keys(modules)[i];
-		if (!modID) continue;
-
-		const mod = getModule(modID as ModuleID);
-		if (!mod) continue;
-
-		mod.instance = rmod;
-	}
-
 	synchronizeFrankerFaceZ();
 });
 </script>

@@ -5,6 +5,7 @@ import { SetHexAlpha } from "../Color";
 export const NullComponent = defineComponent({});
 
 export class ChatMessage<C extends ComponentFactory = ComponentFactory> {
+	public readonly sym = Symbol("seventv-message");
 	public body = "";
 	public author: ChatUser | null = null;
 	public channelID = "";
@@ -18,8 +19,15 @@ export class ChatMessage<C extends ComponentFactory = ComponentFactory> {
 	public deliveryState: MessageDeliveryState = "IDLE";
 	public timestamp = 0;
 	public historical = false;
-	public deleted = false;
-	public banned = false;
+	public moderation: ChatMessageModeration = {
+		deleted: false,
+		banned: false,
+		banDuration: null,
+		banReason: "",
+		actionType: null,
+		actor: null,
+		timestamp: 0,
+	};
 	public slashMe = false;
 	public parent: ChatMessageParent | null = null;
 	public wrappedNode: Element | null = null;
@@ -28,7 +36,13 @@ export class ChatMessage<C extends ComponentFactory = ComponentFactory> {
 	public tokens = new Array<AnyToken>();
 	private tokenizer?: Tokenizer;
 
-	constructor(public readonly id: string) {
+	version = 0;
+
+	update(): void {
+		this.version++;
+	}
+
+	constructor(public id: string) {
 		this.tokenizer = new Tokenizer(this);
 	}
 
@@ -45,11 +59,14 @@ export class ChatMessage<C extends ComponentFactory = ComponentFactory> {
 	}
 
 	public setAuthor(author: ChatUser): void {
+		if (typeof author.username !== "string") author.username = "";
+		if (typeof author.displayName !== "string") author.displayName = "";
+
 		this.author = author;
 	}
 
 	public setID(id: string): void {
-		Object.defineProperty(this, "id", { value: id });
+		this.id = id;
 	}
 
 	public setHighlight(color: string, label: string): void {
@@ -89,6 +106,8 @@ export interface ChatUser {
 	displayName: string;
 	color: string;
 	intl?: boolean;
+	lastMsgId?: symbol;
+	isActor?: boolean;
 }
 
 interface Highlight {
@@ -150,4 +169,14 @@ export interface ChatMessageParent {
 		username: string;
 		displayName: string;
 	} | null;
+}
+
+export interface ChatMessageModeration {
+	deleted: boolean;
+	banned: boolean;
+	banDuration: number | null;
+	banReason: string;
+	actionType: null | "BAN" | "TIMEOUT" | "DELETE";
+	actor: ChatUser | null;
+	timestamp: number;
 }

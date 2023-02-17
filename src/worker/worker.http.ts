@@ -3,13 +3,13 @@
 import { imageHostToSrcset } from "@/common/Image";
 import { log } from "@/common/Logger";
 import { convertBttvEmoteSet, convertFFZEmoteSet, convertSeventvOldCosmetics } from "@/common/Transform";
+import { db } from "@/db/idb";
 import type { WorkerDriver } from "./worker.driver";
 import type { WorkerPort } from "./worker.port";
-import { db } from "@/db/idb";
 
 namespace API_BASE {
-	export const SEVENTV = import.meta.env.VITE_APP_API_REST;
-	export const SEVENTV_OLD = import.meta.env.VITE_APP_API_REST_OLD;
+	export const SEVENTV = import.meta.env.VITE_APP_API;
+	export const SEVENTV_OLD = import.meta.env.VITE_APP_API_OLD;
 	export const FFZ = "https://api.frankerfacez.com/v1";
 	export const BTTV = "https://api.betterttv.net/3";
 }

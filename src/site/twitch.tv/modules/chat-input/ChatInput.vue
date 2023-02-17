@@ -3,6 +3,7 @@
 <!-- eslint-disable prettier/prettier -->
 <script setup lang="ts">
 import { onUnmounted, ref, watch } from "vue";
+import { useMagicKeys } from "@vueuse/core";
 import { useStore } from "@/store/main";
 import { REACT_TYPEOF_TOKEN } from "@/common/Constant";
 import { HookedInstance } from "@/common/ReactHooks";
@@ -13,11 +14,12 @@ import {
 	unsetNamedEventHandler,
 	unsetPropertyHook,
 } from "@/common/Reflection";
+import { useChannelContext } from "@/composable/channel/useChannelContext";
 import { useChatEmotes } from "@/composable/chat/useChatEmotes";
 import { useChatMessages } from "@/composable/chat/useChatMessages";
 import { useCosmetics } from "@/composable/useCosmetics";
 import { getModule } from "@/composable/useModule";
-import { useWorker } from "@/composable/useWorker";
+import { useConfig } from "@/composable/useSettings";
 
 const props = defineProps<{
 	instance: HookedInstance<Twitch.ChatAutocompleteComponent>;
@@ -25,10 +27,15 @@ const props = defineProps<{
 
 const mod = getModule("chat-input");
 const store = useStore();
-const messages = useChatMessages();
-const emotes = useChatEmotes();
+const ctx = useChannelContext(props.instance.component.componentRef.props.channelID);
+const messages = useChatMessages(ctx);
+const emotes = useChatEmotes(ctx);
 const cosmetics = useCosmetics(store.identity?.id ?? "");
-const { sendMessage } = useWorker();
+
+const shouldUseColonComplete = useConfig("chat_input.autocomplete.colon");
+const shouldColonCompleteEmoji = useConfig("chat_input.autocomplete.colon.emoji");
+const shouldAutocompleteChatters = useConfig("chat_input.autocomplete.chatters");
+const mayUseControlEnter = useConfig("chat_input.spam.rapid_fire_send");
 
 const providers = ref<Record<string, Twitch.ChatAutocompleteProvider>>({});
 
@@ -43,62 +50,104 @@ const tabState = ref<
 	| undefined
 >();
 
+const textValue = ref("");
 const awaitingUpdate = ref(false);
 
 const preHistory = ref<Twitch.ChatSlateLeaf[] | undefined>();
 const history = ref<Twitch.ChatSlateLeaf[][]>([]);
 const historyLocation = ref(-1);
 
+const { ctrl: isCtrl } = useMagicKeys();
+
 interface TabToken {
 	token: string;
+	priority: number;
 	fromTwitch: boolean;
 }
 
-function findMatchingTokens(str: string, twitchSets?: Twitch.TwitchEmoteSet[], startsWith?: boolean): TabToken[] {
+function findMatchingTokens(
+	str: string,
+	twitchSets?: Twitch.TwitchEmoteSet[],
+	mode: "tab" | "colon" = "tab",
+): TabToken[] {
 	const usedTokens = new Set<string>();
 
 	const matches: TabToken[] = [];
 
 	const prefix = str.toLowerCase();
+	const test = (token: string) =>
+		({
+			tab: token.toLowerCase().startsWith(prefix),
+			colon: token.toLowerCase().includes(prefix),
+		}[mode]);
 
 	for (const [token] of Object.entries(cosmetics.emotes)) {
-		if (!usedTokens.has(token) && token.toLowerCase()[startsWith ? "startsWith" : "includes"](prefix)) {
-			usedTokens.add(token);
-			matches.push({
-				token,
-				fromTwitch: false,
-			});
-		}
+		if (usedTokens.has(token) || !test(token)) continue;
+
+		usedTokens.add(token);
+		matches.push({
+			token,
+			priority: 4,
+			fromTwitch: false,
+		});
 	}
 
 	for (const [token] of Object.entries(emotes.active)) {
-		if (!usedTokens.has(token) && token.toLowerCase()[startsWith ? "startsWith" : "includes"](prefix)) {
-			usedTokens.add(token);
-			matches.push({
-				token,
-				fromTwitch: false,
-			});
-		}
+		if (usedTokens.has(token) || !test(token)) continue;
+
+		usedTokens.add(token);
+		matches.push({
+			token,
+			priority: 3,
+			fromTwitch: false,
+		});
 	}
 
 	if (twitchSets) {
 		for (const set of twitchSets) {
 			for (const emote of set.emotes) {
-				if (
-					!usedTokens.has(emote.token) &&
-					emote.token.toLowerCase()[startsWith ? "startsWith" : "includes"](prefix)
-				) {
-					usedTokens.add(emote.token);
-					matches.push({
-						token: emote.token,
-						fromTwitch: true,
-					});
-				}
+				if (usedTokens.has(emote.token) || !test(emote.token)) continue;
+
+				usedTokens.add(emote.token);
+				matches.push({
+					token: emote.token,
+					priority: 2,
+					fromTwitch: true,
+				});
 			}
 		}
 	}
 
-	matches.sort((a, b) => a.token.localeCompare(b.token));
+	if (mode === "colon") {
+		for (const [token] of Object.entries(emotes.emojis)) {
+			if (usedTokens.has(token) || !test(token)) continue;
+
+			usedTokens.add(token);
+			matches.push({
+				token,
+				priority: 1,
+				fromTwitch: false,
+			});
+		}
+	}
+
+	if (shouldAutocompleteChatters.value && mode === "tab") {
+		const tokenStartsWithAt = prefix.startsWith("@");
+		const lPrefix = prefix.replace("@", "");
+
+		const chatters = Object.entries(messages.chatters);
+		for (const [, chatter] of chatters) {
+			if (usedTokens.has(chatter.displayName) || !chatter.displayName.toLowerCase().startsWith(lPrefix)) continue;
+
+			matches.push({
+				token: (tokenStartsWithAt ? "@" : "") + chatter.displayName + " ",
+				priority: 0,
+				fromTwitch: true,
+			});
+		}
+	}
+
+	matches.sort((a, b) => a.priority + b.priority + a.token.localeCompare(b.token));
 
 	return matches;
 }
@@ -162,7 +211,7 @@ function handleTabPress(ev: KeyboardEvent): void {
 			state.expectedWord != currentWord
 		) {
 			const searchWord = currentWord.endsWith(" ") ? currentWord.slice(0, -1) : currentWord;
-			matches = findMatchingTokens(searchWord, component.props.emotes, true);
+			matches = findMatchingTokens(searchWord, component.props.emotes, "tab");
 			match = matches[matchIndex];
 		} else {
 			matches = state.matches;
@@ -246,6 +295,12 @@ function useHistory(backwards = true): boolean {
 	if (value) {
 		awaitingUpdate.value = true;
 
+		if (backwards && (slate.selection?.focus.offset ?? 0) > 1) {
+			return false;
+		} else if (!backwards && (slate.selection?.focus.offset ?? 0) < textValue.value.length) {
+			return false;
+		}
+
 		for (const i in slate.children) {
 			slate.apply({ type: "remove_node", path: [i], node: slate.children[i] });
 		}
@@ -314,14 +369,19 @@ function onKeyDown(ev: KeyboardEvent) {
 
 function getMatchesHook(this: unknown, native: ((...args: unknown[]) => object[]) | null, str: string, ...args: []) {
 	if (!str.startsWith(":") || str.length < 3) return;
+	if (!shouldUseColonComplete.value) return;
 
 	const results = native?.call(this, str, ...args) ?? [];
 
-	const allEmotes = { ...cosmetics.emotes, ...emotes.active };
-	const tokens = findMatchingTokens(str.substring(1));
+	const allEmotes = { ...cosmetics.emotes, ...emotes.active, ...emotes.emojis };
+	const tokens = findMatchingTokens(str.substring(1), undefined, "colon");
+
 	for (let i = tokens.length - 1; i > -1; i--) {
 		const token = tokens[i].token;
 		const emote = allEmotes[token];
+		if (!emote || (!shouldColonCompleteEmoji.value && emote.provider == "EMOJI")) {
+			continue;
+		}
 
 		const host = emote?.data?.host ?? { url: "", files: [] };
 		const srcset = host.files
@@ -345,18 +405,44 @@ function getMatchesHook(this: unknown, native: ((...args: unknown[]) => object[]
 			type: "emote",
 			current: str,
 			element: [
-				{
-					[REACT_TYPEOF_TOKEN]: Symbol.for("react.element"),
-					ref: null,
-					key: `emote-img-${emote.id}`,
-					type: "img",
-					props: {
-						style: {
-							padding: "0.5rem",
-						},
-						srcset: srcset,
-					},
-				},
+				emote.provider === "EMOJI"
+					? {
+							[REACT_TYPEOF_TOKEN]: Symbol.for("react.element"),
+							ref: null,
+							key: `emote-icon-${emote.id}`,
+							type: "svg",
+							props: {
+								style: {
+									width: "3em",
+									height: "3em",
+									padding: "0.5rem",
+								},
+								viewBox: "0 0 36 36",
+								children: [
+									{
+										[REACT_TYPEOF_TOKEN]: Symbol.for("react.element"),
+										ref: null,
+										key: `emote-text-${emote.id}-text`,
+										type: "use",
+										props: {
+											href: `#${emote.id}`,
+										},
+									},
+								],
+							},
+					  }
+					: {
+							[REACT_TYPEOF_TOKEN]: Symbol.for("react.element"),
+							ref: null,
+							key: `emote-img-${emote.id}`,
+							type: "img",
+							props: {
+								style: {
+									padding: "0.5rem",
+								},
+								srcset: srcset,
+							},
+					  },
 				{
 					[REACT_TYPEOF_TOKEN]: Symbol.for("react.element"),
 					ref: null,
@@ -378,7 +464,7 @@ function getMatchesHook(this: unknown, native: ((...args: unknown[]) => object[]
 					},
 				},
 			],
-			replacement: token,
+			replacement: emote.unicode ?? token,
 		});
 	}
 
@@ -400,6 +486,7 @@ watch(
 	},
 	{ immediate: true },
 );
+
 defineFunctionHook(
 	props.instance.component,
 	"onEditableValueUpdate",
@@ -407,11 +494,9 @@ defineFunctionHook(
 		if (sendOnUpdate) {
 			pushHistory();
 
-			// Tell the worker to write presence
-			if (store.channel) {
-				sendMessage("CHANNEL_ACTIVE_CHATTER", {
-					channel_id: store.channel.id,
-				});
+			// Put the previous input back in if the user was pressing control
+			if (mayUseControlEnter.value && isCtrl.value) {
+				setTimeout(() => useHistory(true), 0);
 			}
 		}
 
@@ -420,6 +505,7 @@ defineFunctionHook(
 		}
 
 		awaitingUpdate.value = false;
+		textValue.value = value;
 
 		return old?.call(this, value, sendOnUpdate, ...args);
 	},

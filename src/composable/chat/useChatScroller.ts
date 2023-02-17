@@ -1,41 +1,65 @@
 import { Ref, nextTick, reactive, toRef, watchEffect } from "vue";
+import type { ChatMessage } from "@/common/chat/ChatMessage";
 import { useConfig } from "@/composable/useSettings";
-import { useChatMessages } from "./useChatMessages";
 import UiScrollableVue from "@/ui/UiScrollable.vue";
-import fastdom from "fastdom";
+import { ChannelContext } from "../channel/useChannelContext";
 
 const scrollDuration = useConfig<number>("chat.smooth_scroll_duration");
 const lineLimit = useConfig<number>("chat.line_limit");
-
-const data = reactive({
-	// Scroll Data
-	userInput: 0,
-	lineLimit: lineLimit,
-	init: false,
-	sys: true,
-	live: false,
-	visible: true,
-	paused: false, // whether or not scrolling is paused
-	duration: scrollDuration,
-
-	scrollClear: () => {
-		return;
-	},
-
-	container: undefined as HTMLElement | undefined,
-	bounds: undefined as DOMRect | undefined,
-});
 
 interface ChatScrollerInit {
 	scroller: Ref<InstanceType<typeof UiScrollableVue> | undefined>;
 	bounds: Ref<DOMRect>;
 }
 
-export function useChatScroller(initWith?: ChatScrollerInit) {
+interface ChatScroller {
+	// Scroll Data
+	userInput: number;
+	lineLimit: number;
+	init: boolean;
+	sys: boolean;
+	live: boolean;
+	visible: boolean;
+	paused: boolean; // whether or not scrolling is paused
+	duration: number;
+	pauseBuffer: ChatMessage[]; // twitch chat message buffe when scrolling is paused
+
+	scrollClear: () => void;
+
+	container: HTMLElement | undefined;
+	bounds: DOMRect | undefined;
+}
+
+const m = new WeakMap<ChannelContext, ChatScroller>();
+
+export function useChatScroller(ctx: ChannelContext, initWith?: ChatScrollerInit) {
+	let data = m.get(ctx)!;
+	if (!data) {
+		data = reactive<ChatScroller>({
+			// Scroll Data
+			userInput: 0,
+			lineLimit: lineLimit.value,
+			init: false,
+			sys: true,
+			live: false,
+			visible: true,
+			paused: false, // whether or not scrolling is paused
+			duration: scrollDuration.value,
+			pauseBuffer: [] as ChatMessage[], // twitch chat message buffe when scrolling is paused
+
+			scrollClear: () => {
+				return;
+			},
+
+			container: undefined as HTMLElement | undefined,
+			bounds: undefined as DOMRect | undefined,
+		});
+
+		m.set(ctx, data);
+	}
+
 	const container = toRef(data, "container");
 	const bounds = toRef(data, "bounds");
-
-	const messages = useChatMessages();
 
 	if (initWith) {
 		watchEffect(() => {
@@ -70,7 +94,7 @@ export function useChatScroller(initWith?: ChatScrollerInit) {
 		}
 
 		const from = await new Promise<number>((resolve) => {
-			fastdom.measure(() => {
+			nextTick(() => {
 				if (!container.value) return 0;
 
 				resolve(container.value.scrollTop);
@@ -110,22 +134,18 @@ export function useChatScroller(initWith?: ChatScrollerInit) {
 	/**
 	 * Unpauses the scrolling of the chat
 	 */
-	function unpause(): void {
+	async function unpause(): Promise<void> {
 		data.paused = false;
 		data.init = true;
 
-		for (const msg of messages.pauseBuffer) messages.add(msg);
-		messages.pauseBuffer.length = 0;
-
 		nextTick(() => {
 			data.init = false;
-			scrollToLive();
 		});
 	}
 
 	async function onScroll() {
 		const { top, h } = await new Promise<{ top: number; h: number }>((resolve) => {
-			fastdom.measure(() => {
+			nextTick(() => {
 				if (!container.value || !bounds?.value) return { top: 0, h: 0 };
 
 				const top = Math.floor(container.value.scrollTop);
@@ -167,6 +187,7 @@ export function useChatScroller(initWith?: ChatScrollerInit) {
 		lineLimit: toRef(data, "lineLimit"),
 		duration: toRef(data, "duration"),
 		live: toRef(data, "live"),
+		pauseBuffer: toRef(data, "pauseBuffer"),
 
 		scrollToLive,
 		pause,

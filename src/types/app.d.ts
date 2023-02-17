@@ -70,10 +70,11 @@ declare namespace SevenTV {
 
 		component?: Raw<object>;
 
-		value?: T;
 		defaultValue: T;
-		predicate?: (p: T) => boolean;
+		value?: T;
 		disabledIf?: () => boolean;
+		predicate?: (p: T) => boolean;
+		effect?: (v: T) => void;
 
 		options?: {
 			SELECT: [string, T][];
@@ -99,6 +100,7 @@ declare namespace SevenTV {
 		ffz_key?: string;
 		ffz_transform?: (v: unknown) => T;
 	}
+
 	type SettingType = boolean | number | string | object;
 
 	namespace SettingNode {
@@ -108,6 +110,7 @@ declare namespace SevenTV {
 	interface ActiveEmote {
 		id: ObjectID;
 		name: string;
+		unicode?: string;
 		flags: number;
 		timestamp?: number;
 		actor_id?: ObjectID;
@@ -243,7 +246,7 @@ declare namespace SevenTV {
 
 	type ObjectID = string;
 
-	type Provider = "7TV" | "TWITCH" | "BTTV" | "FFZ";
+	type Provider = "7TV" | "TWITCH" | "BTTV" | "FFZ" | "EMOJI";
 
 	enum ObjectKind {
 		USER = 1,
@@ -302,8 +305,7 @@ declare type PlatformIdentity<T extends Platform> = {
 interface CurrentChannel {
 	id: string;
 	username: string;
-	display_name: string;
-	loaded: boolean;
+	displayName: string;
 }
 
 declare namespace BTTV {
@@ -376,3 +378,9 @@ type Either<T, U> = Only<T, U> | Only<U, T>;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 declare type ComponentFactory = abstract new (...args: any) => any;
+
+type NestedKeyOf<ObjectType extends object> = {
+	[Key in keyof ObjectType]: ObjectType[Key] extends object
+		? `${Key}` | `${Key}.${NestedKeyOf<ObjectType[Key]>}`
+		: Key;
+}[keyof ObjectType];

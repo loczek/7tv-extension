@@ -185,6 +185,7 @@ declare module Twitch {
 		isWatchPartyActive: boolean;
 		isShowingCommunityHighlightList: boolean;
 		deletedMessageDisplay: "BRIEF" | "DETAILED" | "LEGACY";
+		chatPauseSetting: "MOUSEOVER" | "SCROLL_ONLY" | "ALTKEY" | "MOUSEOVER_ALTKEY";
 	}>;
 
 	export type ViewerCardComponent = ReactExtended.WritableComponent<{}> & {
@@ -265,7 +266,22 @@ declare module Twitch {
 		onBanUser: (n: any) => void;
 		onCreate: (n: any) => void;
 		onDeleteComment: (n: any) => void;
+		canCurrentUserBan: boolean;
+		canCurrentUserDelete: boolean;
 		videoID: string;
+		data: {
+			badges: ChatBadge[];
+			video: {
+				id: string;
+				login: string;
+				lengthSeconds: number;
+				owner: {
+					id: string;
+					login: string;
+					broadcastBadges: ChatBadge[];
+				};
+			} | null;
+		};
 	}>;
 
 	export type ChatInputController = ReactExtended.WritableComponent<{
@@ -370,6 +386,17 @@ declare module Twitch {
 		onEditableValueUpdate: (value: string, sendOnUpdate: boolean | undefined) => void;
 		getValue: () => string;
 		setValue: (v: string) => void;
+	};
+
+	export type ChatChannelPointsClaimComponent = ReactExtended.WritableComponent<{
+		hidden: boolean;
+	}> & {
+		onClick: () => void;
+		claimErrorTimer: number;
+	};
+
+	export type ChatInputControllerComponent = ReactExtended.WritableComponent<{}> & {
+		container: HTMLDivElement;
 	};
 
 	export interface UserAvatar extends ReactExtended.ReactRuntimeElement {
@@ -593,14 +620,10 @@ declare module Twitch {
 		};
 	}
 
-	export interface MessageCardOpeners {
-		onShowEmoteCard: (v: any) => void;
+	export type MessageCardOpeners = ReactExtended.WritableComponent<{
 		onShowViewerCard: (v: any) => void;
-		hideViewerCard: () => void;
-		props: {
-			onUsernameClick: (v: any) => void;
-		};
-	}
+		setViewerCardPage: (v: any) => void;
+	}>;
 
 	export interface TwitchEmoteSet {
 		id: string;

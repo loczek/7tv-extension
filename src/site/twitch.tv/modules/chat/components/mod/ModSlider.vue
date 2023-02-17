@@ -3,12 +3,12 @@
 		v-if="canModerate"
 		class="seventv-ban-slider"
 		:style="{
-			transform: 'translateX(' + data.pos + ')',
+			transform: 'translateX(' + pos + ')',
 			transition: transition ? 'transform 0.3s ease' : 'none',
 			boxShadow: tracking ? 'black 0px 0.1rem 0.2rem' : 'none',
 		}"
 	>
-		<div class="ban-background" :style="{ backgroundColor: data.color, width: data.pos }">
+		<div class="ban-background" :style="{ backgroundColor: data.color, width: pos }">
 			<span class="text" :style="{ opacity: data.banVis }">
 				{{ data.text }}
 			</span>
@@ -24,7 +24,7 @@
 		<div class="wrapped">
 			<slot />
 		</div>
-		<div class="unban-background" :style="{ width: 'calc(-1 *' + data.pos + ')' }">
+		<div class="unban-background" :style="{ width: 'calc(-1 *' + pos + ')' }">
 			<span class="text" :style="{ opacity: data.unbanVis }"> Unban </span>
 		</div>
 	</div>
@@ -32,41 +32,36 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { reactive, ref, toRef, watch } from "vue";
 import { ChatMessage } from "@/common/chat/ChatMessage";
-import { useChatMessages } from "@/composable/chat/useChatMessages";
+import { useChannelContext } from "@/composable/channel/useChannelContext";
+import { useChatModeration } from "@/composable/chat/useChatModeration";
 import { useChatProperties } from "@/composable/chat/useChatProperties";
-import { maxVal, sliderData } from "./ModSliderBackend";
+import { ModSliderData, maxVal } from "./ModSliderBackend";
 
 const props = defineProps<{
 	msg: ChatMessage;
 }>();
 
-const { sendMessage } = useChatMessages();
-const properties = useChatProperties();
+const ctx = useChannelContext();
+const moderation = useChatModeration(ctx, props.msg.author?.username ?? "");
+const properties = useChatProperties(ctx);
 
 const transition = ref(false);
 const tracking = ref(false);
-
-const data = ref(new sliderData(0));
+const data = reactive(new ModSliderData(props.msg.author?.isActor ?? false));
+const pos = toRef(data, "pos");
 let initial = 0;
 
-const canModerate = computed(() => {
-	// Return false if the user is not a moderator
-	if (!properties.isModerator) return false;
+const canModerate = ref(false);
 
-	// If the state is sent, it was our own message, which we can moderate
-	if (props.msg.deliveryState === "SENT") return true;
-
-	// Check if the target is of type we cant moderate
-	// const badges = props.msg.badges ?? props.msg.message?.badges;
-	// return badges && !("moderator" in badges) && !("broadcaster" in badges) && !("staff" in badges);
-	return true;
-});
-
-function executeModAction(message: string, name: string, id: string) {
-	sendMessage(message.replace("{user}", name).replace("{id}", id));
-}
+watch(
+	() => [properties.isModerator],
+	(a) => {
+		canModerate.value = a.every((x) => x);
+	},
+	{ immediate: true },
+);
 
 const handleDown = (e: PointerEvent) => {
 	e.stopPropagation();
@@ -78,14 +73,27 @@ const handleDown = (e: PointerEvent) => {
 const handleRelease = (e: PointerEvent): void => {
 	tracking.value = false;
 
-	if (data.value.command && props.msg.author) {
-		executeModAction(data.value.command, props.msg.author.username, props.msg.id);
+	if (data.command && props.msg.author) {
+		switch (data.command) {
+			case "ban":
+				moderation.banUserFromChat(data.banDuration?.toString() ?? null);
+				break;
+			case "unban":
+				moderation.unbanUserFromChat();
+				break;
+			case "delete":
+				moderation.deleteChatMessage(props.msg.id);
+				break;
+
+			default:
+				break;
+		}
 	}
 
 	transition.value = true;
 	setTimeout(() => (transition.value = false), 300);
 
-	data.value = new sliderData(0);
+	data.calculate(0);
 	(e.target as HTMLElement).releasePointerCapture(e.pointerId);
 };
 
@@ -95,7 +103,7 @@ const update = (e: PointerEvent): void => {
 
 	const calcPos = Math.max(Math.min(e.pageX - initial, maxVal), -60);
 
-	data.value = new sliderData(calcPos);
+	data.calculate(calcPos);
 };
 </script>
 

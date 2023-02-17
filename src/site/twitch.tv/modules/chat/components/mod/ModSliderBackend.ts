@@ -1,3 +1,5 @@
+import intervalToDuration from "date-fns/fp/intervalToDuration";
+
 export const maxVal = 300.0;
 const minVal = 40.0;
 const delVal = 80.0;
@@ -15,8 +17,9 @@ export function numberToTime(val: number): string {
 	}
 }
 
-export class sliderData {
-	command = "";
+export class ModSliderData {
+	command: "unban" | "ban" | "delete" | "" = "";
+	banDuration: string | null = null;
 	text = "";
 	time = 0;
 	banVis = 0;
@@ -24,28 +27,41 @@ export class sliderData {
 	color = "";
 	pos = "0px";
 
-	constructor(pos: number) {
-		this.pos = `${pos}px`;
+	constructor(private isActor = false) {}
 
-		if (pos < -40) {
-			this.command = "/unban {user}";
+	secondsToBanDuration(time: number): string {
+		const duration = intervalToDuration({ start: 0, end: time * 1000 });
+		return "".concat(
+			duration.days ? `${duration.days}d` : "",
+			duration.hours ? `${duration.hours}h` : "",
+			duration.minutes ? `${duration.minutes}m` : "",
+		);
+	}
+
+	calculate(pos: number): void {
+		this.pos = `${this.isActor ? Math.max(0, pos) : pos}px`;
+
+		if (pos < -40 && !this.isActor) {
+			this.command = "unban";
 			this.unbanVis = 1;
 		} else if (pos < minVal) {
 			return;
 		} else if (pos < delVal) {
-			this.command = "/delete {id}";
+			this.command = "delete";
 			this.text = "Delete";
 			this.color = "#FFFF00";
 			this.banVis = 1;
-		} else if (pos < maxVal) {
+		} else if (pos < maxVal && !this.isActor) {
 			const time = Math.pow((pos + 0.25 * maxVal - delVal) / (1.25 * maxVal - delVal), 10) * maxSeconds;
 
-			this.command = `/timeout {user} ${Math.round(time)}`;
+			this.command = "ban";
+			this.banDuration = this.secondsToBanDuration(Math.round(time)) || "14d";
 			this.text = String(numberToTime(time));
 			this.color = "#FFA500";
 			this.banVis = 1;
-		} else {
-			this.command = "/ban {user}";
+		} else if (pos >= maxVal && !this.isActor) {
+			this.command = "ban";
+			this.banDuration = null;
 			this.text = "Ban";
 			this.color = "#C40000";
 			this.banVis = 1;

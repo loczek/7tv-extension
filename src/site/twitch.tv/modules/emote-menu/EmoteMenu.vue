@@ -1,6 +1,6 @@
 <template>
 	<Teleport :to="containerEl">
-		<div v-if="open" class="seventv-emote-menu-container">
+		<div v-if="open && ctx.channelID" class="seventv-emote-menu-container">
 			<div class="seventv-emote-menu">
 				<!-- Emote Menu Header -->
 				<div class="seventv-emote-menu-header">
@@ -14,12 +14,12 @@
 								@click="activeProvider = key"
 							>
 								<Logo :provider="key" />
-								{{ key }}
+								<span v-show="key === activeProvider">{{ key }}</span>
 							</div>
 						</template>
 					</div>
 					<div v-if="!inputSearch" class="emote-search">
-						<input v-model="filter" class="emote-search-input" />
+						<input v-model="ctx.filter" class="emote-search-input" />
 						<div class="search-icon">
 							<SearchIcon />
 						</div>
@@ -27,18 +27,21 @@
 				</div>
 
 				<!-- Emote menu body -->
-				<template v-for="(_, key) in visibleProviders" :key="key">
-					<div v-show="key === activeProvider" class="seventv-emote-menu-body">
-						<EmoteMenuTab
-							:provider="key"
-							:filter="filter"
-							:selected="key === activeProvider"
-							@emote-clicked="onEmoteClick"
-							@provider-visible="onProviderVisibilityChange(key, $event)"
-							@toggle-settings="settingsToggle"
-						/>
-					</div>
-				</template>
+				<div
+					v-for="(_, key) in visibleProviders"
+					v-show="key === activeProvider"
+					:key="key"
+					v-memo="[activeProvider === key, visibleProviders, ctx.filter]"
+					class="seventv-emote-menu-body"
+				>
+					<EmoteMenuTab
+						:provider="key"
+						:selected="key === activeProvider"
+						@emote-clicked="onEmoteClick"
+						@provider-visible="onProviderVisibilityChange(key, $event)"
+						@toggle-settings="settingsContext.toggle()"
+					/>
+				</div>
 			</div>
 		</div>
 	</Teleport>
@@ -57,10 +60,11 @@ import { onClickOutside, onKeyStroke, useKeyModifier } from "@vueuse/core";
 import { log } from "@/common/Logger";
 import { HookedInstance } from "@/common/ReactHooks";
 import { defineFunctionHook, definePropertyHook, unsetPropertyHook } from "@/common/Reflection";
-import { getModule } from "@/composable/useModule";
 import { useConfig } from "@/composable/useSettings";
+import { useSettingsMenu } from "@/site/global/settings/Settings";
 import SearchIcon from "@/assets/svg/icons/SearchIcon.vue";
 import Logo from "@/assets/svg/logos/Logo.vue";
+import { useEmoteMenuContext } from "./EmoteMenuContext";
 import EmoteMenuTab from "./EmoteMenuTab.vue";
 
 const props = defineProps<{
@@ -70,10 +74,12 @@ const props = defineProps<{
 
 const containerEl = ref<HTMLElement | undefined>();
 
-const open = ref(false);
-const filter = ref("");
+const ctx = useEmoteMenuContext();
+ctx.channelID = props.instance.component.chatInputRef.props.channelID ?? "";
 
-const settingsModule = getModule("settings");
+const settingsContext = useSettingsMenu();
+
+const open = ref(false);
 
 const inputSearch = useConfig<boolean>("ui.emote_menu_search");
 
@@ -83,6 +89,7 @@ const visibleProviders = reactive<Record<SevenTV.Provider, boolean>>({
 	FFZ: true,
 	BTTV: true,
 	TWITCH: true,
+	EMOJI: true,
 });
 
 // Shortcut (ctrl+e)
@@ -93,11 +100,6 @@ onKeyStroke("e", (ev) => {
 	toggle();
 	ev.preventDefault();
 });
-
-// Toggle the settings menu
-function settingsToggle() {
-	settingsModule!.instance?.toggle?.();
-}
 
 // Toggle the menu's visibility
 const toggle = () => {
@@ -130,12 +132,12 @@ function onEmoteClick(emote: SevenTV.ActiveEmote) {
 	let current = inputRef.getValue();
 
 	if (inputSearch.value) {
-		current = current.slice(0, filter.value.length ? filter.value.length * -1 : Infinity);
+		current = current.slice(0, ctx.filter.length ? ctx.filter.length * -1 : Infinity);
 	} else {
 		current = current.at(-1) === " " ? current : current + " ";
 	}
 
-	inputRef.setValue(current + emote.name + " ");
+	inputRef.setValue(current + (emote.unicode ?? emote.name) + " ");
 	props.instance.component.chatInputRef.focus();
 }
 
@@ -155,21 +157,26 @@ defineFunctionHook(props.instance.component, "onBitsIconClick", function (old) {
 definePropertyHook(props.instance.component.autocompleteInputRef, "state", {
 	value(v: typeof props.instance.component.autocompleteInputRef.state) {
 		if (!open.value) {
-			filter.value = "";
+			ctx.filter = "";
 
 			return;
 		}
 
 		if (!inputSearch.value) return;
 
-		filter.value = v.value.split(" ").at(-1) ?? "";
+		ctx.filter = v.value.split(" ").at(-1) ?? "";
 	},
 });
 
-onClickOutside(containerEl, () => (open.value = false));
+onClickOutside(containerEl, () => {
+	if (settingsContext.open) return;
+
+	open.value = false;
+});
 
 onUnmounted(() => {
 	unsetPropertyHook(props.instance.component.autocompleteInputRef, "state");
+	unsetPropertyHook(props.instance.component, "onBitsIconClick");
 });
 </script>
 
@@ -223,25 +230,27 @@ onUnmounted(() => {
 					display: flex;
 					user-select: none;
 					justify-content: center;
+					column-gap: 0.5em;
 					background: hsla(0deg, 0%, 50%, 6%);
 					color: var(--seventv-text-color-secondary);
 					border-radius: 0.2rem;
 					flex-grow: 1;
-					max-width: 12rem;
+					width: 2rem;
 
 					&:hover {
 						background: #80808029;
 					}
 
+					transition: width 90ms ease-in-out, background 150ms ease-in-out;
 					&[selected="true"] {
 						background: var(--seventv-highlight-neutral-1);
 						color: var(--seventv-text-color-normal);
+						width: 6em;
 					}
 
 					> svg {
 						width: 2rem;
 						height: 2rem;
-						margin-right: 0.5rem;
 					}
 				}
 			}

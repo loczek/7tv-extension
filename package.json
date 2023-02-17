@@ -3,7 +3,7 @@
 	"displayName": "7TV",
 	"description": "The Official 7TV Web Extension",
 	"private": true,
-	"version": "3.0.0.6100",
+	"version": "3.0.0.11000",
 	"scripts": {
 		"setup": "vite build --mode dev --minify esnext && vite build -c worker.vite.config.ts --mode dev",
 		"dev": "vite --mode dev",
@@ -18,7 +18,8 @@
 		"lint:style": "stylelint **/*.{vue,scss,css} --ignore-path .gitignore",
 		"lint:js": "eslint --ext .js,.vue,.ts --ignore-path .gitignore .",
 		"lint": "yarn lint:js && yarn lint:style",
-		"preview": "vite preview"
+		"preview": "vite preview",
+		"script:compile-emoji": "tsc -p script/script.tsconfig.json --outDir dist/ && node dist/compile-emojis.js"
 	},
 	"dependencies": {
 		"vue": "^3.2.45"
@@ -29,7 +30,6 @@
 		"@trivago/prettier-plugin-sort-imports": "^4.0.0",
 		"@types/chrome": "^0.0.206",
 		"@types/dompurify": "^2.4.0",
-		"@types/fs-extra": "^9.0.13",
 		"@types/marked": "^4.0.8",
 		"@types/node": "^18.11.18",
 		"@types/sharedworker": "^0.0.88",
@@ -45,17 +45,15 @@
 		"@vueuse/core": "^9.10.0",
 		"chokidar": "^3.5.3",
 		"color2k": "^2.0.0",
+		"date-fns": "^2.29.3",
 		"dexie": "^3.2.2",
 		"dompurify": "^2.4.3",
 		"eslint": "^8.31.0",
 		"eslint-plugin-prettier": "^4.2.1",
 		"eslint-plugin-vue": "^9.8.0",
-		"fastdom": "^1.0.11",
-		"fs-extra": "^11.1.0",
 		"graphql": "^16.6.0",
 		"marked": "^4.2.12",
 		"nanoid": "^4.0.0",
-		"npm-run-all": "^4.1.5",
 		"pinia": "^2.0.28",
 		"postcss-html": "^1.5.0",
 		"prettier": "^2.8.1",

@@ -1,7 +1,7 @@
 import { Ref, customRef, reactive } from "vue";
+import { db } from "@/db/idb";
 import { useFrankerFaceZ } from "./useFrankerFaceZ";
 import { useLiveQuery } from "./useLiveQuery";
-import { db } from "@/db/idb";
 
 const raw = reactive({} as Record<string, SevenTV.SettingType>);
 const nodes = reactive({} as Record<string, SevenTV.SettingNode>);
@@ -16,8 +16,9 @@ function toConfigRef<T extends SevenTV.SettingType>(key: string): Ref<T> {
 				return raw[key] as T;
 			},
 			set(newVal) {
+				const n = nodes[key];
 				// Only write the setting if it passes the optional predicate
-				const predicate = nodes[key].predicate;
+				const predicate = n.predicate;
 				if (predicate && !predicate(newVal)) return;
 
 				raw[key] = newVal;
@@ -25,6 +26,10 @@ function toConfigRef<T extends SevenTV.SettingType>(key: string): Ref<T> {
 
 				// Write changes to the db
 				db.settings.put({ key: key, type: typeof newVal, value: newVal }, key);
+
+				if (typeof n.effect === "function") {
+					n.effect(newVal);
+				}
 			},
 		};
 	});
@@ -60,10 +65,6 @@ export function synchronizeFrankerFaceZ() {
 }
 
 export function useSettings() {
-	function getNodes() {
-		return nodes;
-	}
-
 	function register(newNodes: SevenTV.SettingNode[]) {
 		for (const node of newNodes) {
 			nodes[node.key] = node;
@@ -71,11 +72,27 @@ export function useSettings() {
 			if (["string", "boolean", "object", "number", "undefined"].includes(typeof raw[node.key])) {
 				raw[node.key] = raw[node.key] ?? node.defaultValue;
 			}
+
+			if (typeof node.effect === "function") {
+				node.effect(raw[node.key]);
+			}
 		}
 	}
 
 	return {
-		getNodes,
+		nodes,
 		register,
 	};
+}
+
+export function declareConfig<T extends SevenTV.SettingType, C = SevenTV.SettingNode.ComponentType>(
+	key: string,
+	comType: C,
+	data: Omit<SevenTV.SettingNode<T, C>, "key" | "type">,
+): SevenTV.SettingNode<SevenTV.SettingType, SevenTV.SettingNode.ComponentType> {
+	return {
+		key,
+		type: comType,
+		...data,
+	} as SevenTV.SettingNode<SevenTV.SettingType, SevenTV.SettingNode.ComponentType>;
 }

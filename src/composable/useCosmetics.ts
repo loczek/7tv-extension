@@ -1,10 +1,10 @@
-import { Ref, reactive, ref, toRef, toRefs } from "vue";
+import { Ref, reactive, ref, toRef } from "vue";
 import { until, useTimeout } from "@vueuse/core";
-import { useStore } from "@/store/main";
+import { DecimalToStringRGBA } from "@/common/Color";
 import { log } from "@/common/Logger";
+import { db } from "@/db/idb";
 import { useLiveQuery } from "./useLiveQuery";
 import { useWorker } from "./useWorker";
-import { db } from "@/db/idb";
 
 const data = reactive({
 	cosmetics: {} as Record<SevenTV.ObjectID, SevenTV.Cosmetic>,
@@ -30,7 +30,6 @@ let flushTimeout: number | null = null;
  * Set up cosmetics
  */
 db.ready().then(async () => {
-	const { channel } = toRefs(useStore());
 	const { target } = useWorker();
 
 	const cosmeticsFetched = ref(false);
@@ -42,6 +41,10 @@ db.ready().then(async () => {
 
 			for (const cos of result) {
 				data.cosmetics[cos.id] = cos;
+
+				if (cos.kind === "PAINT") {
+					insertPaintStyle(cos as SevenTV.Cosmetic<"PAINT">);
+				}
 			}
 
 			cosmeticsFetched.value = true;
@@ -84,13 +87,13 @@ db.ready().then(async () => {
 				}
 
 				data.cosmetics[paint.id] = paint;
+				insertPaintStyle(paint);
 			}
 		},
 		{ once: true },
 	);
 
 	await until(cosmeticsFetched).toBeTruthy();
-	await until(channel).not.toBeNull();
 
 	/**
 	 * Bind or unbind an entitlement to a user
@@ -279,4 +282,75 @@ export function useCosmetics(userID: string) {
 		emotes: toRef(data.userEmoteMap, userID),
 		emoteSets: toRef(data.userEmoteSets, userID),
 	});
+}
+
+const definedPaintRules = new Set<string>();
+let paintSheet: CSSStyleSheet | null = null;
+function getPaintStylesheet(): CSSStyleSheet | null {
+	if (paintSheet) return paintSheet;
+
+	const link = document.createElement("link");
+	link.type = "text/css";
+	link.rel = "stylesheet";
+
+	const s = document.createElement("style");
+	s.id = "seventv-paint-styles";
+
+	document.head.appendChild(s);
+
+	return (paintSheet = s.sheet ?? null);
+}
+
+// This defines CSS variables in our global paint stylesheet for the given paint
+function insertPaintStyle(paint: SevenTV.Cosmetic<"PAINT">): void {
+	if (definedPaintRules.has(paint.id)) return;
+	const sheet = getPaintStylesheet();
+	if (!sheet) {
+		log.error("<Cosmetics>", "Could not find paint stylesheet");
+		return;
+	}
+
+	const prefix = `--seventv-paint-${paint.id}`;
+
+	const cssFunction = paint.data.function.toLowerCase().replace("_", "-");
+	const bgImage = (() => {
+		const args = [] as string[];
+		switch (paint.data.function) {
+			case "LINEAR_GRADIENT": // paint is linear gradient
+				args.push(`${paint.data.angle}deg`);
+				break;
+			case "RADIAL_GRADIENT": // paint is radial gradient
+				args.push(paint.data.shape ?? "circle");
+				break;
+			case "URL": // paint is an image
+				args.push(paint.data.image_url ?? "");
+				break;
+		}
+		let funcPrefix = "";
+		if (paint.data.function !== "URL") {
+			funcPrefix = paint.data.repeat ? "repeating-" : "";
+		}
+
+		for (const stop of paint.data.stops) {
+			const color = DecimalToStringRGBA(stop.color);
+			args.push(`${color} ${stop.at * 100}%`);
+		}
+
+		return `${funcPrefix}${cssFunction}(${args.join(", ")})`;
+	})();
+
+	const filter = (() => {
+		if (!paint.data.shadows) {
+			return "";
+		}
+
+		return paint.data.shadows
+			.map((v) => `drop-shadow(${v.x_offset}px ${v.y_offset}px ${v.radius}px ${DecimalToStringRGBA(v.color)})`)
+			.join(" ");
+	})();
+
+	// this inserts the css variables into the custom paint stylesheet
+	sheet.insertRule(` :root { ${prefix}-bg: ${bgImage}; ${prefix}-filter: ${filter}; } `, sheet.cssRules.length);
+
+	definedPaintRules.add(paint.id);
 }
