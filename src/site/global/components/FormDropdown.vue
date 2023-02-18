@@ -21,7 +21,7 @@ select {
 	background-color: var(--seventv-input-background);
 	padding: 0.5rem 1rem;
 	border-radius: 0.25rem;
-	border: 1px solid var(--seventv-input-border);
+	border: 0.01rem solid var(--seventv-input-border);
 	color: var(--seventv-text-color-normal);
 }
 </style>
